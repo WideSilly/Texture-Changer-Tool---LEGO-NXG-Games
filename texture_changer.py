@@ -7,11 +7,12 @@ Features:
 - Show the selected texture (attempts to load DDS via Pillow)
 - Export selected texture as .dds
 - Change selected texture by selecting a .dds file; original file is backed up as file.gsc.bak before saving
+- Delete selected texture; original file is backed up as file.gsc.bak before saving
 
 Notes:
 - This script tries to preview DDS files using Pillow. For DDS support you may need the pillow-dds plugin
   (pip install pillow-dds) or use an installed Pillow build that supports DDS. If preview fails, the tool still
-  allows Export/Change operations on the raw bytes.
+  allows Export/Change/Delete operations on the raw bytes.
 - Use Python 3.8+ and run as a .pyw (no console) or .py for debugging.
 
 """
@@ -70,6 +71,9 @@ class GSCTextureTool(tk.Tk):
 
         btn_change = ttk.Button(frame_mid, text="Change Texture", command=self.change_texture)
         btn_change.pack(side=tk.LEFT, padx=6)
+
+        btn_delete = ttk.Button(frame_mid, text="Delete Texture", command=self.delete_texture)
+        btn_delete.pack(side=tk.LEFT, padx=6)
 
         # Preview area and info
         frame_bottom = ttk.Frame(self)
@@ -299,6 +303,66 @@ class GSCTextureTool(tk.Tk):
         # Replace bytes in memory and write file
         start, end = self.texture_ranges[self.current_texture_index]
         new_data = self.gsc_bytes[:start] + new_bytes + self.gsc_bytes[end:]
+
+        try:
+            with open(self.gsc_path, 'wb') as f:
+                f.write(new_data)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to write updated GSC file:\n{e}")
+            # attempt to restore from backup
+            try:
+                shutil.copy2(bak_path, self.gsc_path)
+                messagebox.showinfo("Restore", "Original file restored from backup")
+            except Exception:
+                messagebox.showwarning("Warning", "Failed to restore original from backup — manual restore may be required")
+            return
+
+        # reload
+        try:
+            with open(self.gsc_path, 'rb') as f:
+                self.gsc_bytes = f.read()
+        except Exception as e:
+            messagebox.showwarning("Warning", f"Saved but failed to reload file:\n{e}")
+            self.set_status("Saved (could not reload)")
+            return
+
+        # reparsed textures
+        self.parse_textures()
+        # keep the same logical texture index if possible, else clamp
+        new_count = len(self.texture_ranges)
+        if new_count == 0:
+            self.texture_combo['values'] = []
+            self.texture_var.set("")
+            self.clear_preview()
+            self.set_status(f"Replaced texture and saved. Backup: {bak_path}")
+            return
+
+        if self.current_texture_index >= new_count:
+            self.current_texture_index = new_count - 1
+        self.update_texture_list()
+        # set selection to the replaced texture if possible
+        if self.current_texture_index is not None:
+            self.texture_combo.current(self.current_texture_index)
+            self.show_texture(self.current_texture_index)
+
+        self.set_status(f"Texture replaced and file saved. Backup: {bak_path}")
+        
+    def delete_texture(self):
+        if self.gsc_path is None or self.current_texture_index is None:
+            messagebox.showinfo("Info", "Select a GSC and a texture first")
+            return
+
+        # backup original
+        bak_path = self.gsc_path + '.bak'
+        try:
+            shutil.copy2(self.gsc_path, bak_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create backup file ({bak_path}):\n{e}")
+            return
+
+        # Replace bytes in memory and write file
+        start, end = self.texture_ranges[self.current_texture_index]
+        new_data = self.gsc_bytes[:start] + self.gsc_bytes[end:]
 
         try:
             with open(self.gsc_path, 'wb') as f:
